@@ -1,0 +1,7 @@
+STACK_NAME=lambda-auth-stack
+REGION=<AWS Region where you want to set the resources>
+ARTIFACTS_BUCKET=<Name of the S3 bucket created for the package command>
+STACK_FILE=template.yaml #This is the Cloudformation yaml file provided in the solution, don’t change this
+TOKEN_ISSUER_URI=<Issuer uri for the third party Identity Provider>
+JWKS_URI=<JWKS uri to fetch the public keys to verify the tokens>
+AUDIENCE=<Required Audience>

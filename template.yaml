@@ -1,0 +1,214 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Stack to set the lambda authorizer for a third party Idenity Provider
+
+Parameters:
+  pTokenIssuer:
+    Type: String
+    Description: The issuer of the token
+
+  pJWKSUri:
+    Type: String
+    Description: URL of the associated JWKS endpoint
+
+  pAudience:
+    Type: String
+    Description: The Audience of the token
+  
+  pLambdaFunctionName:
+    Type: String
+    Description: The function name of the Lambda authorizer
+    Default: 'restapi-lambda-authorizer'
+
+  pLambdaFunctionRole:
+    Type: String
+    Description: The function name of the Lambda authorizer
+    Default: 'restapi-lambda-authorizer-role'
+
+Resources:  
+  LambdaAuthorizer:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: lambda_authorizer.handler
+      FunctionName: !Ref pLambdaFunctionName
+      Environment:
+        Variables:
+          TOKEN_ISSUER_URI: !Ref pTokenIssuer
+          JWKS_URI: !Ref pJWKSUri
+          AUDIENCE: !Ref pAudience
+      Runtime: nodejs14.x
+      MemorySize: 256
+      Timeout: 120
+      Role: !GetAtt LambaAuthorizerRole.Arn
+      Code: src/
+
+  LambaAuthorizerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref pLambdaFunctionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - apigateway.amazonaws.com
+            - lambda.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+              - lambda:InvokeFunction
+              Resource:
+              - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${pLambdaFunctionName}"
+          PolicyName: LambdaExecutionPolicy
+  
+  PetStoreRestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: PetStore Rest API
+      Body:
+        openapi: "3.0.1"
+        info:
+          description: Your first API with Amazon API Gateway. This is a sample API that integrates
+            via HTTP with our demo Pet Store endpoints
+          title: PetStore
+        schemes:
+        - https
+        paths:
+          "/pets":
+            get:
+              tags:
+              - pets
+              summary: List all pets
+              produces:
+              - application/json
+              parameters:
+              - name: type
+                in: query
+                description: The type of pet to retrieve
+                required: false
+                type: string
+              - name: page
+                in: query
+                description: Page number of results to return.
+                required: false
+                type: string
+              responses:
+                '200':
+                  description: Successful operation
+                  schema:
+                    "$ref": "#/definitions/Pets"
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: string
+                      description: URI that may access the resource
+              security:
+                - lambda_authorizer: []
+              x-amazon-apigateway-integration:
+                responses:
+                  default:
+                    statusCode: '200'
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                requestParameters:
+                  integration.request.querystring.page: method.request.querystring.page
+                  integration.request.querystring.type: method.request.querystring.type
+                uri: http://petstore.execute-api.us-east-1.amazonaws.com/petstore/pets
+                passthroughBehavior: when_no_match
+                httpMethod: GET
+                type: http
+            options:
+              consumes:
+              - application/json
+              produces:
+              - application/json
+              responses:
+                '200':
+                  description: Successful operation
+                  schema:
+                    "$ref": "#/definitions/Empty"
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: string
+                      description: URI that may access the resource
+                    Access-Control-Allow-Methods:
+                      type: string
+                      description: Method or methods allowed when accessing the resource
+                    Access-Control-Allow-Headers:
+                      type: string
+                      description: Used in response to a preflight request to indicate which
+                        HTTP headers can be used when making the request.
+              x-amazon-apigateway-integration:
+                responses:
+                  default:
+                    statusCode: '200'
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Methods: "'POST,GET,OPTIONS'"
+                      method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                passthroughBehavior: when_no_match
+                requestTemplates:
+                  application/json: '{"statusCode": 200}'
+                type: mock
+        definitions:
+          Pets:
+            type: array
+            items:
+              "$ref": "#/definitions/Pet"
+          Empty:
+            type: object
+          Pet:
+            type: object
+            properties:
+              id:
+                type: integer
+              type:
+                type: string
+              price:
+                type: number
+          PetType:
+            type: string
+            enum:
+            - dog
+            - cat
+            - fish
+            - bird
+            - gecko
+        components:
+          securitySchemes:
+            lambda_authorizer:
+              type: "apiKey"
+              name: "Authorization"
+              in: "header"
+              x-amazon-apigateway-authtype: 'oauth2'
+              x-amazon-apigateway-authorizer:
+                authorizerUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${pLambdaFunctionName}/invocations"
+                authorizerPayloadFormatVersion: "2.0"
+                authorizerResultTtlInSeconds: 300
+                authorizerCredentials : !Sub "arn:aws:iam::${AWS::AccountId}:role/${pLambdaFunctionRole}"
+                type: "token"
+
+
+
+  RestApiDeployment:
+    Type: 'AWS::ApiGateway::Deployment'
+    Properties:
+      RestApiId: !Ref PetStoreRestApi
+      Description: Petstore Deployment
+
+  RestApiTestStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      StageName: test
+      Description: test Stage
+      DeploymentId: !Ref RestApiDeployment
+      RestApiId: !Ref PetStoreRestApi
+
+Outputs:    
+  LambdaAuthorizerArn: 
+    Value: !GetAtt LambdaAuthorizer.Arn
